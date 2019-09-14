@@ -10,7 +10,6 @@ from pathlib import Path
 import argparse
 import json
 import numpy as np
-from tqdm import tqdm
 import torch
 from torch.optim import SGD
 from torch.optim.lr_scheduler import CosineAnnealingLR
@@ -21,10 +20,10 @@ from torch.nn import DataParallel
 from torch.backends import cudnn
 import torchvision.transforms as T
 import torchvision.datasets as datasets
-import torchnet as tnt
 from wrn_mcdonnell import WRN_McDonnell
 
 cudnn.benchmark = True
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Binary Wide Residual Networks')
@@ -73,6 +72,7 @@ def main():
     print('parsed options:', vars(args))
 
     have_cuda = torch.cuda.is_available()
+
     def cast(x):
         return x.cuda() if have_cuda else x
 
@@ -119,33 +119,40 @@ def main():
 
     def train():
         model.train()
-        meter_loss = tnt.meter.AverageValueMeter()
-        classacc = tnt.meter.ClassErrorMeter(accuracy=True)
-        train_iterator = tqdm(train_loader, dynamic_ncols=True)
-        for x, y in train_iterator:
+        train_loss = 0
+        correct = 0
+        total = 0
+        for x, y in train_loader:
             optimizer.zero_grad()
             outputs = model(cast(x))
             loss = cross_entropy(outputs, cast(y))
             loss.backward()
             optimizer.step()
-            meter_loss.add(loss.item())
-            train_iterator.set_postfix(loss=loss.item())
-            classacc.add(outputs.data.cpu(), y.cpu())
-        return meter_loss.mean, classacc.value()[0]
+
+            train_loss += loss.item() * y.size(0)
+            _, predicted = outputs.max(1)
+            total += y.size(0)
+            correct += predicted.eq(cast(y)).sum().item()
+
+        return train_loss/total, 100.*correct/total
 
     def test():
         model.eval()
-        meter_loss = tnt.meter.AverageValueMeter()
-        classacc = tnt.meter.ClassErrorMeter(accuracy=True)
-        test_iterator = tqdm(test_loader, dynamic_ncols=True)
-        for x, y in test_iterator:
+        test_loss = 0
+        correct = 0
+        total = 0
+        for x, y in test_loader:
             optimizer.zero_grad()
             outputs = model(cast(x))
             loss = cross_entropy(outputs, cast(y))
             loss.backward()
-            meter_loss.add(loss.item())
-            classacc.add(outputs.data.cpu(), y.cpu())
-        return meter_loss.mean, classacc.value()[0]
+
+            test_loss += loss.item() * y.size(0)
+            _, predicted = outputs.max(1)
+            total += y.size(0)
+            correct += predicted.eq(cast(y)).sum().item()
+
+        return test_loss/total, 100.*correct/total
 
     for epoch in range(start_epoch, args.epochs):
         scheduler.step()
